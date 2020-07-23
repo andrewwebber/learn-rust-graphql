@@ -49,20 +49,17 @@ mod repo {
         fn get(&self, id: &str) -> Result<T, Box<dyn Error>>;
     }
 
-    #[derive(Clone)]
-    pub struct FileRepository {
-        path: String,
+    pub struct FileRepository<'a> {
+        path: &'a str,
     }
 
-    impl FileRepository {
-        pub fn new(path: &str) -> FileRepository {
-            FileRepository {
-                path: path.to_owned(),
-            }
+    impl<'a> FileRepository<'a> {
+        pub fn new(path: &'a str) -> FileRepository<'a> {
+            FileRepository { path }
         }
     }
 
-    impl<T: DeserializeOwned + Serialize + Hash> crate::repo::Repository<T> for FileRepository {
+    impl<'a, T: DeserializeOwned + Serialize + Hash> crate::repo::Repository<T> for FileRepository<'a> {
         fn set(&self, obj: T) -> Result<T, Box<dyn Error>> {
             use std::collections::hash_map::DefaultHasher;
             use std::fs::File;
@@ -196,7 +193,7 @@ mod graphql {
         let sys = actix_rt::System::run_in_tokio("server", &local);
 
         let schema = Schema::build(QueryRoot, MutationRoot, EmptySubscription)
-            .data(repo.clone())
+            .data(repo)
             .finish();
 
         println!("Playground: http://localhost:8000");
