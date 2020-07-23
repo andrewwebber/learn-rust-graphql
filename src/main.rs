@@ -20,21 +20,17 @@ mod usecases {
     use super::repo::*;
     use std::error::Error;
 
-    pub struct Contacts {}
+    pub fn create(
+        contact: Contact,
+        repo: &dyn Repository<Contact>,
+    ) -> Result<Contact, Box<dyn Error>> {
+        let r = repo.set(contact.clone())?;
+        println!("contact created {:?}", contact);
+        Ok(r)
+    }
 
-    impl Contacts {
-        pub fn create(
-            contact: Contact,
-            repo: &dyn Repository<Contact>,
-        ) -> Result<Contact, Box<dyn Error>> {
-            let r = repo.set(contact.clone())?;
-            println!("contact created {:?}", contact);
-            Ok(r)
-        }
-
-        pub fn get(id: &str, repo: &dyn Repository<Contact>) -> Result<Contact, Box<dyn Error>> {
-            repo.get(id)
-        }
+    pub fn get(id: &str, repo: &dyn Repository<Contact>) -> Result<Contact, Box<dyn Error>> {
+        repo.get(id)
     }
 }
 
@@ -59,7 +55,7 @@ mod repo {
         }
     }
 
-    impl<'a, T: DeserializeOwned + Serialize + Hash> crate::repo::Repository<T> for FileRepository<'a> {
+    impl<'a, T: DeserializeOwned + Serialize + Hash> Repository<T> for FileRepository<'a> {
         fn set(&self, obj: T) -> Result<T, Box<dyn Error>> {
             use std::collections::hash_map::DefaultHasher;
             use std::fs::File;
@@ -91,6 +87,9 @@ mod repo {
 
 mod graphql {
 
+    use super::models::*;
+    use super::repo::*;
+    use super::usecases::*;
     use actix_web::{guard, web, App, HttpResponse, HttpServer};
     use async_graphql::http::{playground_source, GraphQLPlaygroundConfig};
     use async_graphql::*;
@@ -118,9 +117,9 @@ mod graphql {
             &self,
             ctx: &Context<'_>,
             #[arg(desc = "id")] id: String,
-        ) -> FieldResult<crate::models::Contact> {
-            let repo = ctx.data_unchecked::<crate::repo::FileRepository>();
-            match crate::usecases::Contacts::get(id.as_str(), repo) {
+        ) -> FieldResult<Contact> {
+            let repo = ctx.data_unchecked::<FileRepository>();
+            match get(id.as_str(), repo) {
                 Ok(c) => Ok(c),
                 Err(e) => Err(FieldError(format!("{}", e).to_owned(), None)),
             }
@@ -133,8 +132,8 @@ mod graphql {
         last_name: String,
     }
 
-    impl std::convert::From<crate::models::Contact> for QueryContact {
-        fn from(c: crate::models::Contact) -> Self {
+    impl std::convert::From<Contact> for QueryContact {
+        fn from(c: Contact) -> Self {
             Self {
                 first_name: c.first_name.to_owned(),
                 last_name: c.last_name.to_owned(),
@@ -151,9 +150,9 @@ mod graphql {
             ctx: &Context<'_>,
             #[arg(desc = "contact")] contact: MutationCreate,
         ) -> FieldResult<QueryContact> {
-            let repo = ctx.data_unchecked::<crate::repo::FileRepository>();
-            let model: crate::models::Contact = contact.into();
-            crate::usecases::Contacts::create(model, repo).map_or_else(
+            let repo = ctx.data_unchecked::<FileRepository>();
+            let model: Contact = contact.into();
+            create(model, repo).map_or_else(
                 |e| Err(FieldError(format!("{}", e).to_owned(), None)),
                 |c| Ok(QueryContact::from(c)),
             )
@@ -167,8 +166,8 @@ mod graphql {
         last_name: String,
     }
 
-    impl std::convert::From<crate::models::Contact> for MutationCreate {
-        fn from(c: crate::models::Contact) -> Self {
+    impl std::convert::From<Contact> for MutationCreate {
+        fn from(c: Contact) -> Self {
             Self {
                 id: c.id.to_owned(),
                 first_name: c.first_name.to_owned(),
@@ -177,9 +176,9 @@ mod graphql {
         }
     }
 
-    impl std::convert::Into<crate::models::Contact> for MutationCreate {
-        fn into(self) -> crate::models::Contact {
-            crate::models::Contact {
+    impl std::convert::Into<Contact> for MutationCreate {
+        fn into(self) -> Contact {
+            Contact {
                 id: self.id.to_owned(),
                 first_name: self.first_name.to_owned(),
                 last_name: self.last_name.to_owned(),
@@ -188,7 +187,7 @@ mod graphql {
     }
 
     pub async fn start_server() -> std::io::Result<()> {
-        let repo = crate::repo::FileRepository::new("/tmp");
+        let repo = FileRepository::new("/tmp");
         let local = tokio::task::LocalSet::new();
         let sys = actix_rt::System::run_in_tokio("server", &local);
 
