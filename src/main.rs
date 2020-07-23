@@ -1,43 +1,52 @@
+#[macro_use]
+extern crate log;
+
 mod models {
-    #[async_graphql::SimpleObject]
-    #[derive(Debug, serde::Serialize, serde::Deserialize, Clone)]
+    use async_graphql::SimpleObject;
+    use serde::{Deserialize, Serialize};
+
+    #[SimpleObject]
+    #[derive(Debug, Serialize, Deserialize, Clone, Hash)]
     pub struct Contact {
         pub id: String,
         pub first_name: String,
         pub last_name: String,
     }
-
-    impl Contact {
-        pub fn new(id: &str, first_name: &str, last_name: &str) -> Self {
-            Self {
-                id: id.to_owned(),
-                first_name: first_name.to_owned(),
-                last_name: last_name.to_owned(),
-            }
-        }
-    }
 }
 
 mod usecases {
+
+    use super::models::*;
+    use super::repo::*;
+    use std::error::Error;
 
     pub struct Contacts {}
 
     impl Contacts {
         pub fn create(
-            contact: crate::models::Contact,
-            repo: &impl crate::repo::Repository<crate::models::Contact>,
-        ) -> Result<crate::models::Contact, Box<dyn std::error::Error>> {
-            let r = repo.set(contact.clone());
+            contact: Contact,
+            repo: &dyn Repository<Contact>,
+        ) -> Result<Contact, Box<dyn Error>> {
+            let r = repo.set(contact.clone())?;
             println!("contact created {:?}", contact);
-            r
+            Ok(r)
+        }
+
+        pub fn get(id: &str, repo: &dyn Repository<Contact>) -> Result<Contact, Box<dyn Error>> {
+            repo.get(id)
         }
     }
 }
 
 mod repo {
+    use serde::de::DeserializeOwned;
+    use serde::Serialize;
+    use std::error::Error;
+    use std::hash::Hash;
+
     pub trait Repository<T> {
-        fn set(&self, obj: T) -> Result<T, Box<dyn std::error::Error>>;
-        fn get(&self, id: &str) -> Result<T, Box<dyn std::error::Error>>;
+        fn set(&self, obj: T) -> Result<T, Box<dyn Error>>;
+        fn get(&self, id: &str) -> Result<T, Box<dyn Error>>;
     }
 
     #[derive(Clone)]
@@ -53,19 +62,30 @@ mod repo {
         }
     }
 
-    impl<T: serde::de::DeserializeOwned + serde::Serialize> crate::repo::Repository<T>
-        for FileRepository
-    {
-        fn set(&self, obj: T) -> Result<T, Box<dyn std::error::Error>> {
+    impl<T: DeserializeOwned + Serialize + Hash> crate::repo::Repository<T> for FileRepository {
+        fn set(&self, obj: T) -> Result<T, Box<dyn Error>> {
+            use std::collections::hash_map::DefaultHasher;
             use std::fs::File;
-            let f = File::create(&self.path)?;
+            use std::hash::Hasher;
+            use std::path::Path;
+
+            let mut hasher = DefaultHasher::new();
+            obj.hash(&mut hasher);
+            let hash = hasher.finish();
+            let path = Path::new(&self.path).join(format!("{}.json", hash));
+            println!("{:?}", path);
+
+            let f = File::create(path)?;
             serde_json::to_writer(f, &obj).expect("Unable to serialized");
             Ok(obj)
         }
 
-        fn get(&self, id: &str) -> Result<T, Box<dyn std::error::Error>> {
+        fn get(&self, id: &str) -> Result<T, Box<dyn Error>> {
             use std::fs::File;
-            let f = File::open(&self.path)?;
+            use std::path::Path;
+            let path = Path::new(&self.path).join(format!("{}.json", id));
+            println!("{:?}", path);
+            let f = File::open(&path)?;
             let result: T = serde_json::from_reader(f).expect("Unable to serialized");
             Ok(result)
         }
@@ -76,16 +96,18 @@ mod graphql {
 
     use actix_web::{guard, web, App, HttpResponse, HttpServer};
     use async_graphql::http::{playground_source, GraphQLPlaygroundConfig};
-    use async_graphql::{Context, EmptySubscription, IntoQueryBuilderOpts, Schema};
+    use async_graphql::*;
     use async_graphql_actix_web::{GQLRequest, GQLResponse};
 
     type ContactsSchema = Schema<QueryRoot, MutationRoot, EmptySubscription>;
 
     async fn index(schema: web::Data<ContactsSchema>, req: GQLRequest) -> GQLResponse {
+        debug!("request");
         req.into_inner().execute(&schema).await.into()
     }
 
     async fn gql_playgound() -> HttpResponse {
+        debug!("playground");
         HttpResponse::Ok()
             .content_type("text/html; charset=utf-8")
             .body(playground_source(GraphQLPlaygroundConfig::new("/")))
@@ -93,20 +115,22 @@ mod graphql {
 
     struct QueryRoot;
 
-    #[async_graphql::Object]
+    #[Object]
     impl QueryRoot {
         async fn get(
             &self,
-            _: &Context<'_>,
+            ctx: &Context<'_>,
             #[arg(desc = "id")] id: String,
-            #[arg(desc = "firstname")] first_name: String,
-            #[arg(desc = "lastname")] last_name: String,
-        ) -> crate::models::Contact {
-            crate::models::Contact::new(id.as_str(), first_name.as_str(), last_name.as_str())
+        ) -> FieldResult<crate::models::Contact> {
+            let repo = ctx.data_unchecked::<crate::repo::FileRepository>();
+            match crate::usecases::Contacts::get(id.as_str(), repo) {
+                Ok(c) => Ok(c),
+                Err(e) => Err(FieldError(format!("{}", e).to_owned(), None)),
+            }
         }
     }
 
-    #[async_graphql::SimpleObject]
+    #[SimpleObject]
     struct QueryContact {
         first_name: String,
         last_name: String,
@@ -123,23 +147,23 @@ mod graphql {
 
     struct MutationRoot;
 
-    #[async_graphql::Object]
+    #[Object]
     impl MutationRoot {
         async fn create(
             &self,
             ctx: &Context<'_>,
             #[arg(desc = "contact")] contact: MutationCreate,
-        ) -> Result<QueryContact, async_graphql::FieldError> {
+        ) -> FieldResult<QueryContact> {
             let repo = ctx.data_unchecked::<crate::repo::FileRepository>();
             let model: crate::models::Contact = contact.into();
-            crate::usecases::Contacts::create(model, &repo.clone()).map_or_else(
-                |_| Err(async_graphql::FieldError("oops".to_owned(), None)),
+            crate::usecases::Contacts::create(model, repo).map_or_else(
+                |e| Err(FieldError(format!("{}", e).to_owned(), None)),
                 |c| Ok(QueryContact::from(c)),
             )
         }
     }
 
-    #[async_graphql::InputObject]
+    #[InputObject]
     struct MutationCreate {
         id: String,
         first_name: String,
@@ -167,7 +191,7 @@ mod graphql {
     }
 
     pub async fn start_server() -> std::io::Result<()> {
-        let repo = crate::repo::FileRepository::new("/tmp/foo.json");
+        let repo = crate::repo::FileRepository::new("/tmp");
         let local = tokio::task::LocalSet::new();
         let sys = actix_rt::System::run_in_tokio("server", &local);
 
