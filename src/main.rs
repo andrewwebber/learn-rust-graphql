@@ -121,7 +121,7 @@ mod graphql {
             let repo = ctx.data_unchecked::<FileRepository>();
             match get(id.as_str(), repo) {
                 Ok(c) => Ok(c),
-                Err(e) => Err(FieldError(format!("{}", e).to_owned(), None)),
+                Err(e) => Err(FieldError(format!("{}", e), None)),
             }
         }
     }
@@ -135,8 +135,8 @@ mod graphql {
     impl std::convert::From<Contact> for QueryContact {
         fn from(c: Contact) -> Self {
             Self {
-                first_name: c.first_name.to_owned(),
-                last_name: c.last_name.to_owned(),
+                first_name: c.first_name,
+                last_name: c.last_name,
             }
         }
     }
@@ -153,7 +153,7 @@ mod graphql {
             let repo = ctx.data_unchecked::<FileRepository>();
             let model: Contact = contact.into();
             create(model, repo).map_or_else(
-                |e| Err(FieldError(format!("{}", e).to_owned(), None)),
+                |e| Err(FieldError(format!("{}", e), None)),
                 |c| Ok(QueryContact::from(c)),
             )
         }
@@ -170,8 +170,8 @@ mod graphql {
         fn from(c: Contact) -> Self {
             Self {
                 id: c.id.to_owned(),
-                first_name: c.first_name.to_owned(),
-                last_name: c.last_name.to_owned(),
+                first_name: c.first_name,
+                last_name: c.last_name,
             }
         }
     }
@@ -180,8 +180,8 @@ mod graphql {
         fn into(self) -> Contact {
             Contact {
                 id: self.id.to_owned(),
-                first_name: self.first_name.to_owned(),
-                last_name: self.last_name.to_owned(),
+                first_name: self.first_name,
+                last_name: self.last_name,
             }
         }
     }
@@ -197,7 +197,7 @@ mod graphql {
 
         println!("Playground: http://localhost:8000");
 
-        let server_res = HttpServer::new(move || {
+        HttpServer::new(move || {
             App::new()
                 .data(schema.clone())
                 .service(web::resource("/").guard(guard::Post()).to(index).app_data(
@@ -212,7 +212,7 @@ mod graphql {
         .run()
         .await?;
         sys.await?;
-        Ok(server_res)
+        Ok(())
     }
 }
 
