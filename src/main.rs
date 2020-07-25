@@ -20,16 +20,16 @@ mod usecases {
     use super::repo::*;
     use std::error::Error;
 
-    pub fn create(
+    pub fn create<T: Repository<Contact>>(
         contact: Contact,
-        repo: &dyn Repository<Contact>,
+        repo: &T,
     ) -> Result<Contact, Box<dyn Error>> {
         let r = repo.set(contact.clone())?;
         println!("contact created {:?}", contact);
         Ok(r)
     }
 
-    pub fn get(id: &str, repo: &dyn Repository<Contact>) -> Result<Contact, Box<dyn Error>> {
+    pub fn get<T: Repository<Contact>>(id: &str, repo: &T) -> Result<Contact, Box<dyn Error>> {
         repo.get(id)
     }
 }
