@@ -151,11 +151,10 @@ mod graphql {
             #[arg(desc = "contact")] contact: MutationCreate,
         ) -> FieldResult<QueryContact> {
             let repo = ctx.data_unchecked::<FileRepository>();
-            let model: Contact = contact.into();
-            create(model, repo).map_or_else(
-                |e| Err(FieldError(format!("{}", e), None)),
-                |c| Ok(QueryContact::from(c)),
-            )
+            match create(contact.into(), repo) {
+                Err(e) => Err(FieldError(format!("{}", e), None)),
+                Ok(c) => Ok(c.into()),
+            }
         }
     }
 
